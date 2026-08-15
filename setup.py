@@ -22,8 +22,13 @@ else:
 if not IS_HIP:
     cc_flag = ["--use_fast_math"]
 else:
-    archs = os.getenv("GPU_ARCHS", "native").split(";")
-    cc_flag = [f"--offload-arch={arch}" for arch in archs]
+    archs = os.getenv("GPU_ARCHS", "gfx1030").split(";")
+    _rocm = os.getenv("ROCM_PATH", "")
+    cc_flag = [f"--offload-arch={a}" for a in archs] + [
+        f"--rocm-path={_rocm}",
+        f"--rocm-device-lib-path={os.path.join(_rocm,'lib','llvm','amdgcn','bitcode')}",
+        "-fms-extensions",
+    ]
 
 if platform.system() == "Windows":
     extra_compile_args = {
@@ -37,6 +42,9 @@ else:
         "cxx": ["-O3", "-std=c++20", "-fopenmp", f"-D_GLIBCXX_USE_CXX11_ABI={cxx11_abi}"],
         "nvcc": ["-O3", "-std=c++20"] + cc_flag,
     }
+
+def src(path):
+    return path[:-3] + ".hip" if IS_HIP and path.endswith(".cu") else path
 
 setup(
     name="flex_gemm",
@@ -56,13 +64,13 @@ setup(
             name="flex_gemm.kernels.cuda",
             sources=[
                 # Hashmap functions
-                "flex_gemm/kernels/cuda/hash/hash.cu",
+                src("flex_gemm/kernels/cuda/hash/hash.cu"),
                 # Serialization functions
-                "flex_gemm/kernels/cuda/serialize/api.cu",
+                src("flex_gemm/kernels/cuda/serialize/api.cu"),
                 # Grid sample functions
-                "flex_gemm/kernels/cuda/grid_sample/grid_sample.cu",
+                src("flex_gemm/kernels/cuda/grid_sample/grid_sample.cu"),
                 # Convolution functions
-                "flex_gemm/kernels/cuda/spconv/neighbor_map.cu",
+                src("flex_gemm/kernels/cuda/spconv/neighbor_map.cu"),
                 # main
                 "flex_gemm/kernels/cuda/ext.cpp",
             ],
