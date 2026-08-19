@@ -10,7 +10,7 @@ on:
     inputs:
       gfx_arch:
         description: "GPU arch(s), semicolon-separated. Default = all sanity-tested."
-        default: "gfx1010;gfx1012;gfx1030;gfx1031;gfx1032;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1153;gfx1200;gfx1201"
+        default: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
         required: true
       torch_pin:
         description: "Exact torch version to build against (7.14 line)."
@@ -56,7 +56,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip wheel setuptools ninja
           $arch = "${{ github.event.inputs.gfx_arch }}"
-          if (-not $arch) { $arch = "gfx1010;gfx1012;gfx1030;gfx1031;gfx1032;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1153;gfx1200;gfx1201" }
+          if (-not $arch) { $arch = "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201" }
           echo "GFX_ARCH=$arch" >> $env:GITHUB_ENV
           # Pin to the 7.14 production line (more stable than 10.1 nightlies).
           # torch exact version required (local version can't be wildcarded);
