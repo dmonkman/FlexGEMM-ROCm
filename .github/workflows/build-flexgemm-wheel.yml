@@ -14,7 +14,7 @@ name: Build FlexGEMM ROCm wheel
 # beyond torch.
 
 on:
-  workflow_dispatch:          # manual "Run workflow" button
+  workflow_dispatch:
     inputs:
       gfx_arch:
         description: "GPU arch(s), semicolon-separated. Default = RDNA1-4 consumer set + gfx1250."
@@ -29,7 +29,7 @@ on:
         default: "10.0.0"
         required: true
   release:
-    types: [created]          # also build when you publish a release
+    types: [created]
 
 env:
   TORCH_PIN:   ${{ github.event.inputs.torch_pin || '2.13.0+rocm10.0.0' }}
@@ -41,7 +41,7 @@ env:
 
 permissions:
   contents: read
-  id-token: write             # required for build provenance attestation
+  id-token: write
   attestations: write
 
 jobs:
@@ -51,13 +51,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, ubuntu-24.04]
-        python-version: ["3.12"]     # add "3.13" once you've confirmed it runs
+        python-version: ["3.12"]
     steps:
       - name: Checkout (rocm-gfx1030)
         uses: actions/checkout@v4
         with:
           ref: rocm-gfx1030
-          submodules: recursive       # harmless if FlexGEMM vendors none
+          submodules: recursive
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -153,7 +153,7 @@ jobs:
         shell: pwsh
         env:
           GPU_ARCHS: ${{ env.GFX_ARCH }}
-          DISTUTILS_USE_SDK: "1"       # let setuptools use the MSVC env
+          DISTUTILS_USE_SDK: "1"
         run: |
           Write-Host "Building for $env:GPU_ARCHS with ROCM_PATH=$env:ROCM_PATH"
           python -m pip wheel . --no-build-isolation --no-deps -w dist -v 2>&1 | Tee-Object build.log
