@@ -18,7 +18,7 @@ authors = [
     { name = "Jianfeng Xiang", email = "belljig@outlook.com" }
 ]
 maintainers = [
-    { name = "Drayton Monkman" email = "dmonkman@proton.me"}
+    { name = "Drayton Monkman", email = "dmonkman@proton.me"}
 ]
 dependencies = [
     "torch>=2.4.0",
