@@ -2,7 +2,7 @@ import triton
 from ..utils import get_autotune_config
 
 
-allow_tf32 = True
+allow_ieee = True
 
 
 autotune_config = get_autotune_config(

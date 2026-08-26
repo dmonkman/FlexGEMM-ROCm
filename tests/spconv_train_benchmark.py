@@ -16,11 +16,11 @@ from utils import sphere_coords, benchmark_kernel, zero_grad
 
 
 DTYPE = torch.float16
-allow_tf32 = True
+allow_ieee = True
 
 
 def spconv_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
-    spconv_core.constants.SPCONV_ALLOW_TF32 = allow_tf32
+    spconv_core.constants.SPCONV_ALLOW_ieee = allow_ieee
     # Init module.
     model = torch.nn.ModuleList([
         spconv.SubMConv3d(C, C, 3, algo=spconv.ConvAlgo.MaskSplitImplicitGemm).cuda().to(feats.dtype)
@@ -45,7 +45,7 @@ def spconv_kernel_fn(model, feats, coords, shape):
 
 
 def torchsparse_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
-    torchsparse.backends.allow_tf32 = allow_tf32
+    torchsparse.backends.allow_ieee = allow_ieee
     torchsparse.backends.hash_rsv_ratio = 4
     torchsparse.nn.functional.set_kmap_mode("hashmap_on_the_fly")
     conv_mode = torchsparse.nn.functional.ConvMode.mode1
@@ -83,7 +83,7 @@ def fvdb_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size
     ])
 
     for layer in model:
-        layer.allow_tf32 = allow_tf32
+        layer.allow_ieee = allow_ieee
     
     return {
         'model': model,
@@ -129,7 +129,7 @@ def warpconvnet_kernel_fn(model, feats, coords, shape):
 
 def flex_gemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM_SPLITK)
-    flex_gemm.kernels.triton.spconv.config.allow_tf32 = allow_tf32
+    flex_gemm.kernels.triton.spconv.config.allow_ieee = allow_ieee
 
     # Create random weight and bias matrices.
     params = torch.nn.ParameterDict()

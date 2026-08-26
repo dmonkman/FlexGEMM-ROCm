@@ -9,12 +9,12 @@ from utils import sphere_coords, benchmark_kernel, zero_grad
 
 torch.autograd.set_grad_enabled(False)
 DTYPE = torch.float16
-allow_tf32 = True
+allow_ieee = True
 
 
 def egemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.EXPLICIT_GEMM)
-    flex_gemm.kernels.triton.spconv.config.allow_tf32 = allow_tf32
+    flex_gemm.kernels.triton.spconv.config.allow_ieee = allow_ieee
 
     # Create random weight and bias matrices.
     params = torch.nn.ParameterDict()
@@ -36,7 +36,7 @@ def egemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Siz
 
 def igemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.IMPLICIT_GEMM)
-    flex_gemm.kernels.triton.spconv.config.allow_tf32 = allow_tf32
+    flex_gemm.kernels.triton.spconv.config.allow_ieee = allow_ieee
 
     # Create random weight and bias matrices.
     params = torch.nn.ParameterDict()
@@ -58,7 +58,7 @@ def igemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Siz
 
 def igemm_splitk_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.IMPLICIT_GEMM_SPLITK)
-    flex_gemm.kernels.triton.spconv.config.allow_tf32 = allow_tf32
+    flex_gemm.kernels.triton.spconv.config.allow_ieee = allow_ieee
 
     # Create random weight and bias matrices.
     params = torch.nn.ParameterDict()
@@ -80,7 +80,7 @@ def igemm_splitk_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: to
 
 def migemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM)
-    flex_gemm.kernels.triton.spconv.config.allow_tf32 = allow_tf32
+    flex_gemm.kernels.triton.spconv.config.allow_ieee = allow_ieee
 
     # Create random weight and bias matrices.
     params = torch.nn.ParameterDict()
@@ -101,7 +101,7 @@ def migemm_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Si
 
 def migemm_splitk_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size, RES, C, L):
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM_SPLITK)
-    flex_gemm.kernels.triton.spconv.config.allow_tf32 = allow_tf32
+    flex_gemm.kernels.triton.spconv.config.allow_ieee = allow_ieee
 
     # Create random weight and bias matrices.
     params = torch.nn.ParameterDict()

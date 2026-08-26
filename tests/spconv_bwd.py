@@ -86,7 +86,7 @@ def fvdb_prepare_fn(feats: torch.Tensor, coords: torch.Tensor, shape: torch.Size
     input = grid.jagged_like(feats)
     sparse_conv_packinfo, out_grid = grid.sparse_conv_kernel_map(kernel_size=ksize, stride=1)
     sparse_conv_packinfo.build_implicit_gemm(
-        sorted=True, split_mask_num=1, training=True, split_mask_num_bwd=3, use_tf32=True
+        sorted=True, split_mask_num=1, training=True, split_mask_num_bwd=3, use_ieee=True
     )
 
     output = sparse_conv_packinfo.sparse_conv_3d(input, weights=weight, backend=fvdb.ConvPackBackend.IGEMM).jflatten().jdata + bias
@@ -289,8 +289,8 @@ def test_conv_bwd():
             results[config_key]['memory'].append(f'{memory:.1f}G')
             if C_kernel is not None:
                 err_max, err_mean = calc_err(C_kernel, C_ref)
-                results[config_key]['err_max'].append(f'{err_max * 1000:.0f}‰')
-                results[config_key]['err_mean'].append(f'{err_mean * 1000:.0f}‰')
+                results[config_key]['err_max'].append(f'{err_max * 1000:.0f}?')
+                results[config_key]['err_mean'].append(f'{err_mean * 1000:.0f}?')
             else:
                 results[config_key]['err_max'].append('N/A')
                 results[config_key]['err_mean'].append('N/A')

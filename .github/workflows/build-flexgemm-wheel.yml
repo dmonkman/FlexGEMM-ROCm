@@ -1,0 +1,199 @@
+name: Build FlexGEMM ROCm wheel
+
+# Cross-compiles the FlexGEMM multi-arch wheel for BOTH Windows and Linux on
+# GPU-less runners, using TheRock's stable ROCm 10.0 pip toolchain. --offload-arch
+# targets the arch at build time, so no physical AMD GPU is needed to compile;
+# runtime correctness still has to be validated on real hardware.
+#
+# One file, OS matrix. Divergent parts (MSVC/clang-cl vs hipcc, pwsh vs bash) are
+# `if: runner.os == ...` steps; the shared tail runs once per leg.
+#
+# FlexGEMM is its own repo, so this builds the wheel from the repo root (`.`),
+# unlike o_voxel which builds the `./o-voxel` subdir of TRELLIS.2. See the Triton
+# note in the install steps — FlexGEMM is the one wheel that may need a build dep
+# beyond torch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      gfx_arch:
+        description: "GPU arch(s), semicolon-separated. Default = RDNA1-4 consumer set + gfx1250."
+        default: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250"
+        required: true
+      torch_pin:
+        description: "Exact torch version (stable ROCm 10.0 line)."
+        default: "2.13.0+rocm10.0.0"
+        required: true
+      rocm_pin:
+        description: "Exact rocm SDK version."
+        default: "10.0.0"
+        required: true
+  release:
+    types: [created]
+
+env:
+  TORCH_PIN:   ${{ github.event.inputs.torch_pin || '2.13.0+rocm10.0.0' }}
+  ROCM_PIN:    ${{ github.event.inputs.rocm_pin  || '10.0.0' }}
+  ROCM_INDEX:  https://stable.repo.amd.com/rocm/whl-next/
+  # Default arch list is the RDNA consumer set plus gfx1250 (the RDNA4.5 APU
+  # target — baked in to save re-running the fanout later). To also cover Instinct,
+  # append: gfx908;gfx90a;gfx942;gfx950 via the dispatch input.
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+        python-version: ["3.12, 3.13, 3.14"]
+    steps:
+      - name: Checkout (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: recursive
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # ── Windows-only toolchain: MSVC/clang-cl dev environment ────────────────
+      - name: Set up MSVC dev environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # ── Install ROCm torch: Windows (pwsh) ───────────────────────────────────
+      - name: Install build tooling + ROCm torch (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip wheel setuptools ninja
+          $arch = "${{ github.event.inputs.gfx_arch }}"
+          if (-not $arch) { $arch = "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250" }
+          echo "GFX_ARCH=$arch" >> $env:GITHUB_ENV
+          # Stable pins, no --pre. torchvision/torchaudio aren't needed to compile.
+          # If a transitive dep 404s here, switch --index-url to --extra-index-url.
+          python -m pip install --index-url $env:ROCM_INDEX `
+            "torch==$env:TORCH_PIN" `
+            "rocm[libraries,devel,device-all]==$env:ROCM_PIN"
+          # FlexGEMM uses Triton kernels. --no-build-isolation means build deps
+          # must be preinstalled; if setup.py imports triton at build time,
+          # uncomment the next line (Windows Triton build):
+          # python -m pip install triton-windows
+
+      # ── Install ROCm torch: Linux (bash) ─────────────────────────────────────
+      - name: Install build tooling + ROCm torch (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip wheel setuptools ninja
+          arch="${{ github.event.inputs.gfx_arch }}"
+          if [ -z "$arch" ]; then arch="gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250"; fi
+          echo "GFX_ARCH=$arch" >> "$GITHUB_ENV"
+          python -m pip install --index-url "$ROCM_INDEX" \
+            "torch==$TORCH_PIN" \
+            "rocm[libraries,devel,device-all]==$ROCM_PIN"
+          # FlexGEMM uses Triton kernels. pytorch-triton-rocm usually ships with
+          # the ROCm torch above; if the build can't import triton, uncomment:
+          # python -m pip install pytorch-triton-rocm
+
+      # ── Discover ROCm + compiler on PATH: Windows (pwsh) ─────────────────────
+      - name: Discover ROCm path + put clang on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # 'rocm-sdk path --root' returns the real toolchain root
+          # (site-packages\_rocm_sdk_devel), NOT the rocm_sdk wrapper package.
+          $rocmPath = (& rocm-sdk path --root).Trim()
+          if (-not $rocmPath -or -not (Test-Path $rocmPath)) {
+            Write-Error "rocm-sdk path --root did not return a valid path: '$rocmPath'"
+            exit 1
+          }
+          echo "ROCM_PATH=$rocmPath" >> $env:GITHUB_ENV
+          echo "ROCM_HOME=$rocmPath" >> $env:GITHUB_ENV
+          # Force clang-cl so torch's cpp_extension / HIP build finds it over cl.exe.
+          $llvmBin = Join-Path $rocmPath "lib\llvm\bin"
+          echo "$llvmBin" >> $env:GITHUB_PATH
+          echo "CC=clang-cl"  >> $env:GITHUB_ENV
+          echo "CXX=clang-cl" >> $env:GITHUB_ENV
+          Write-Host "ROCM_PATH = $rocmPath"
+          Write-Host "clang present: $(Test-Path (Join-Path $llvmBin 'amdclang-cl.exe'))"
+          python -c "import torch; print('torch', torch.__version__, 'hip', torch.version.hip)"
+
+      # ── Discover ROCm + compiler on PATH: Linux (bash) ───────────────────────
+      - name: Discover ROCm path + put hipcc/clang on PATH (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rocmPath="$(rocm-sdk path --root)"
+          if [ -z "$rocmPath" ] || [ ! -d "$rocmPath" ]; then
+            echo "rocm-sdk path --root did not return a valid path: '$rocmPath'" >&2
+            exit 1
+          fi
+          echo "ROCM_PATH=$rocmPath" >> "$GITHUB_ENV"
+          echo "ROCM_HOME=$rocmPath" >> "$GITHUB_ENV"
+          # No clang-cl override on Linux: torch drives hipcc for device code and
+          # system g++ for host code once torch.version.hip is set.
+          echo "$rocmPath/bin"          >> "$GITHUB_PATH"
+          echo "$rocmPath/lib/llvm/bin" >> "$GITHUB_PATH"
+          echo "ROCM_PATH = $rocmPath"
+          echo "hipcc present: $([ -x "$rocmPath/bin/hipcc" ] && echo yes || echo no)"
+          python -c "import torch; print('torch', torch.__version__, 'hip', torch.version.hip)"
+
+      # ── Build wheel: Windows (pwsh) ──────────────────────────────────────────
+      - name: Build wheel for $GFX_ARCH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GPU_ARCHS: ${{ env.GFX_ARCH }}
+          DISTUTILS_USE_SDK: "1"
+        run: |
+          Write-Host "Building for $env:GPU_ARCHS with ROCM_PATH=$env:ROCM_PATH"
+          python -m pip wheel . --no-build-isolation --no-deps -w dist -v 2>&1 | Tee-Object build.log
+          Get-ChildItem dist
+
+      # ── Build wheel: Linux (bash) ────────────────────────────────────────────
+      - name: Build wheel for $GFX_ARCH (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GPU_ARCHS: ${{ env.GFX_ARCH }}
+        run: |
+          echo "Building for $GPU_ARCHS with ROCM_PATH=$ROCM_PATH"
+          python -m pip wheel . --no-build-isolation --no-deps -w dist -v 2>&1 | tee build.log
+          ls -l dist
+
+      # ── Shared tail ──────────────────────────────────────────────────────────
+      - name: Upload build log (always, for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ runner.os }}-py${{ matrix.python-version }}
+          path: build.log
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flexgemm-multiarch-${{ runner.os }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+
+      # Cryptographically tie the wheel to this source + workflow run.
+      - name: Generate build provenance attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/*.whl
+
+      # On a release, attach the wheel. win_amd64 vs linux_x86_64 tags mean the
+      # two legs never collide on the same release.
+      - name: Attach wheel to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl

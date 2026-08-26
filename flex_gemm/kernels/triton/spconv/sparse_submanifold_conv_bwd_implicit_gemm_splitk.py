@@ -14,7 +14,7 @@ from .sparse_submanifold_conv_bwd_implicit_gemm import (
 
 @triton_autotune(
     configs=config.autotune_config,
-    key=['LOGN', 'Ci', 'Co', 'V', 'SPLITK', 'allow_tf32'],
+    key=['LOGN', 'Ci', 'Co', 'V', 'SPLITK', 'allow_ieee'],
 )
 @triton.jit
 def sparse_submanifold_conv_bwd_input_implicit_gemm_splitk_kernel(
@@ -29,7 +29,7 @@ def sparse_submanifold_conv_bwd_input_implicit_gemm_splitk_kernel(
     B2: tl.constexpr,   # Block size for Ci dimension
     BK: tl.constexpr,   # Block size for K dimension (V * Co)
     SPLITK: tl.constexpr,  # Split K dimension
-    allow_tf32: tl.constexpr,  # Allow TF32 precision for matmuls
+    allow_ieee: tl.constexpr,  # Allow ieee precision for matmuls
 ):
     """
     Sparse submanifold convolution backward to input kernel using implicit GEMM.
@@ -73,7 +73,7 @@ def sparse_submanifold_conv_bwd_input_implicit_gemm_splitk_kernel(
         weight_block = tl.load(weight_ptr, mask=k_mask[:, None], other=0.0)
         # Accumulate along the K dimension.
         accumulator = tl.dot(grad_output_block, weight_block, accumulator,
-                             input_precision='tf32' if allow_tf32 else 'ieee')                              # (B1, B2)
+                             input_precision='ieee' if allow_ieee else 'ieee')                              # (B1, B2)
                 
     # Write back the block of the output matrix with masks.
     grad_input_offset_n = block_id_n * B1 + tl.arange(0, B1)
@@ -91,7 +91,7 @@ heuristics = {
     
 @triton_autotune(
     configs=config.autotune_config,
-    key=['LOGN', 'Ci', 'Co', 'V', 'SPLITK', 'allow_tf32'],
+    key=['LOGN', 'Ci', 'Co', 'V', 'SPLITK', 'allow_ieee'],
 )
 @triton.heuristics(heuristics)
 @triton.jit
@@ -109,7 +109,7 @@ def sparse_submanifold_conv_bwd_weight_implicit_gemm_splitk_kernel(
     BV: tl.constexpr,   # Block size for V dimension
     BCi: tl.constexpr,  # Block size for Ci dimension
     SPLITK: tl.constexpr,  # Split K dimension
-    allow_tf32: tl.constexpr,  # Allow TF32 precision for matmuls
+    allow_ieee: tl.constexpr,  # Allow ieee precision for matmuls
 ):
     """
     Sparse submanifold convolution backward to weight kernel using implicit GEMM.
@@ -149,7 +149,7 @@ def sparse_submanifold_conv_bwd_weight_implicit_gemm_splitk_kernel(
         input_block = tl.load(input_ptr, mask=input_offset_n[:, :, None] != 0xffffffff, other=0.0).reshape(BK, BV * BCi)
         # Accumulate along the K dimension.
         accumulator = tl.dot(grad_output_block, input_block, accumulator,
-                             input_precision='tf32' if allow_tf32 else 'ieee')                  # (B1, B2)
+                             input_precision='ieee' if allow_ieee else 'ieee')                  # (B1, B2)
         # Advance pointers.
         grad_output_ptr += BK * Co
         neighbor_ptr += BK * V
@@ -204,7 +204,7 @@ def sparse_submanifold_conv_bwd_input_implicit_gemm_splitk(
             neighbor,
             grad_input,
             N, LOGN, Ci, Co, V,
-            allow_tf32=config.allow_tf32,
+            allow_ieee=config.allow_ieee,
         )
         return grad_input
     else:
@@ -217,7 +217,7 @@ def sparse_submanifold_conv_bwd_input_implicit_gemm_splitk(
             grad_input,
             N, LOGN, Ci, Co, V,
             SPLITK=SPLITK,
-            allow_tf32=config.allow_tf32,
+            allow_ieee=config.allow_ieee,
         )
         return grad_input.sum(0).to(weight.dtype)
     
@@ -264,7 +264,7 @@ def sparse_submanifold_conv_bwd_weight_implicit_gemm_splitk(
             neighbor,
             grad_weight,
             N, LOGN, Ci, Co, V,
-            allow_tf32=config.allow_tf32,
+            allow_ieee=config.allow_ieee,
         )
         return grad_weight
     else:
@@ -277,7 +277,7 @@ def sparse_submanifold_conv_bwd_weight_implicit_gemm_splitk(
             grad_weight,
             N, LOGN, Ci, Co, V,
             SPLITK=SPLITK,
-            allow_tf32=config.allow_tf32,
+            allow_ieee=config.allow_ieee,
         )
         return grad_weight.sum(0).to(grad_output.dtype)
 
