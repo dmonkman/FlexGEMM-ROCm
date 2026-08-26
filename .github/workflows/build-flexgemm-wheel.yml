@@ -1,27 +1,23 @@
-name: Build o_voxel ROCm wheel
+name: Build FlexGEMM ROCm wheel
 
-# Cross-compiles the o_voxel (inside TRELLIS.2) multi-arch wheel for BOTH Windows
-# and Linux on GPU-less runners, using TheRock's stable ROCm 10.0 pip toolchain.
-# --offload-arch targets the arch at build time, so no physical AMD GPU is needed
-# to compile; runtime correctness still has to be validated on real hardware.
+# Cross-compiles the FlexGEMM multi-arch wheel for BOTH Windows and Linux on
+# GPU-less runners, using TheRock's stable ROCm 10.0 pip toolchain. --offload-arch
+# targets the arch at build time, so no physical AMD GPU is needed to compile;
+# runtime correctness still has to be validated on real hardware.
 #
-# One file, OS matrix. The genuinely divergent parts (MSVC/clang-cl setup, hipcc
-# vs clang-cl, pwsh vs bash) are split into `if: runner.os == ...` steps; the
-# shared tail (checkout, python, artifacts, attestation, release) runs once per leg.
+# One file, OS matrix. Divergent parts (MSVC/clang-cl vs hipcc, pwsh vs bash) are
+# `if: runner.os == ...` steps; the shared tail runs once per leg.
 #
-# ── PER-WHEEL EDITS (to reuse this for cumesh / flex_gemm / nvdiffrast) ──────────
-#   1. `name:` above.
-#   2. Build subdir in BOTH build steps: o_voxel builds `./o-voxel`; the others
-#      build `.` (repo root).
-#   3. Artifact + log names: replace `ovoxel` below.
-#   4. `submodules` note in checkout if the repo vendors different deps.
-# ────────────────────────────────────────────────────────────────────────────────
+# FlexGEMM is its own repo, so this builds the wheel from the repo root (`.`),
+# unlike o_voxel which builds the `./o-voxel` subdir of TRELLIS.2. See the Triton
+# note in the install steps — FlexGEMM is the one wheel that may need a build dep
+# beyond torch.
 
 on:
   workflow_dispatch:          # manual "Run workflow" button
     inputs:
       gfx_arch:
-        description: "GPU arch(s), semicolon-separated. Default = RDNA1-4 consumer set."
+        description: "GPU arch(s), semicolon-separated. Default = RDNA1-4 consumer set + gfx1250."
         default: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250"
         required: true
       torch_pin:
@@ -39,10 +35,9 @@ env:
   TORCH_PIN:   ${{ github.event.inputs.torch_pin || '2.13.0+rocm10.0.0' }}
   ROCM_PIN:    ${{ github.event.inputs.rocm_pin  || '10.0.0' }}
   ROCM_INDEX:  https://stable.repo.amd.com/rocm/whl-next/
-  # NOTE: default arch list is the RDNA consumer set (matches the sanity-tested
-  # table). To also cover Instinct, append: gfx908;gfx90a;gfx942;gfx950 and
-  # gfx1250 once you want the RDNA4.5 APU. They bloat build time/size for hardware
-  # that won't run desktop ComfyUI, so they're opt-in via the dispatch input.
+  # Default arch list is the RDNA consumer set plus gfx1250 (the RDNA4.5 APU
+  # target — baked in to save re-running the fanout later). To also cover Instinct,
+  # append: gfx908;gfx90a;gfx942;gfx950 via the dispatch input.
 
 permissions:
   contents: read
@@ -56,13 +51,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, ubuntu-24.04]
-        python-version: ["3.12"]
+        python-version: ["3.12"]     # add "3.13" once you've confirmed it runs
     steps:
       - name: Checkout (rocm-gfx1030)
         uses: actions/checkout@v4
         with:
           ref: rocm-gfx1030
-          submodules: recursive
+          submodules: recursive       # harmless if FlexGEMM vendors none
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -83,13 +78,15 @@ jobs:
           $arch = "${{ github.event.inputs.gfx_arch }}"
           if (-not $arch) { $arch = "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250" }
           echo "GFX_ARCH=$arch" >> $env:GITHUB_ENV
-          # Stable pins, no --pre needed. torchvision/torchaudio are NOT required
-          # to compile a torch extension, so they're omitted to save build time.
-          # If a transitive dep 404s on this index, switch --index-url to
-          # --extra-index-url so PyPI stays available for those.
+          # Stable pins, no --pre. torchvision/torchaudio aren't needed to compile.
+          # If a transitive dep 404s here, switch --index-url to --extra-index-url.
           python -m pip install --index-url $env:ROCM_INDEX `
             "torch==$env:TORCH_PIN" `
             "rocm[libraries,devel,device-all]==$env:ROCM_PIN"
+          # FlexGEMM uses Triton kernels. --no-build-isolation means build deps
+          # must be preinstalled; if setup.py imports triton at build time,
+          # uncomment the next line (Windows Triton build):
+          # python -m pip install triton-windows
 
       # ── Install ROCm torch: Linux (bash) ─────────────────────────────────────
       - name: Install build tooling + ROCm torch (Linux)
@@ -103,6 +100,9 @@ jobs:
           python -m pip install --index-url "$ROCM_INDEX" \
             "torch==$TORCH_PIN" \
             "rocm[libraries,devel,device-all]==$ROCM_PIN"
+          # FlexGEMM uses Triton kernels. pytorch-triton-rocm usually ships with
+          # the ROCm torch above; if the build can't import triton, uncomment:
+          # python -m pip install pytorch-triton-rocm
 
       # ── Discover ROCm + compiler on PATH: Windows (pwsh) ─────────────────────
       - name: Discover ROCm path + put clang on PATH (Windows)
@@ -156,7 +156,7 @@ jobs:
           DISTUTILS_USE_SDK: "1"       # let setuptools use the MSVC env
         run: |
           Write-Host "Building for $env:GPU_ARCHS with ROCM_PATH=$env:ROCM_PATH"
-          python -m pip wheel .\o-voxel --no-build-isolation --no-deps -w dist -v 2>&1 | Tee-Object build.log
+          python -m pip wheel . --no-build-isolation --no-deps -w dist -v 2>&1 | Tee-Object build.log
           Get-ChildItem dist
 
       # ── Build wheel: Linux (bash) ────────────────────────────────────────────
@@ -167,7 +167,7 @@ jobs:
           GPU_ARCHS: ${{ env.GFX_ARCH }}
         run: |
           echo "Building for $GPU_ARCHS with ROCM_PATH=$ROCM_PATH"
-          python -m pip wheel ./o-voxel --no-build-isolation --no-deps -w dist -v 2>&1 | tee build.log
+          python -m pip wheel . --no-build-isolation --no-deps -w dist -v 2>&1 | tee build.log
           ls -l dist
 
       # ── Shared tail ──────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ jobs:
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ovoxel-multiarch-${{ runner.os }}-py${{ matrix.python-version }}
+          name: flexgemm-multiarch-${{ runner.os }}-py${{ matrix.python-version }}
           path: dist/*.whl
 
       # Cryptographically tie the wheel to this source + workflow run.
