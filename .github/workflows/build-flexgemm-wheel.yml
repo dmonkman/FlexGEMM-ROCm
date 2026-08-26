@@ -1,26 +1,48 @@
-name: Build FlexGEMM ROCm wheel (Windows)
+name: Build o_voxel ROCm wheel
 
-# Cross-compiles a FlexGEMM multi-arch wheel on a GPU-less Windows runner using TheRock's
-# pip-installed ROCm toolchain. Compilation does NOT need a physical AMD GPU;
-# --offload-arch targets the arch at build time. Runtime correctness still has
-# to be validated on real hardware (the runner can't do that).
+# Cross-compiles the o_voxel (inside TRELLIS.2) multi-arch wheel for BOTH Windows
+# and Linux on GPU-less runners, using TheRock's stable ROCm 10.0 pip toolchain.
+# --offload-arch targets the arch at build time, so no physical AMD GPU is needed
+# to compile; runtime correctness still has to be validated on real hardware.
+#
+# One file, OS matrix. The genuinely divergent parts (MSVC/clang-cl setup, hipcc
+# vs clang-cl, pwsh vs bash) are split into `if: runner.os == ...` steps; the
+# shared tail (checkout, python, artifacts, attestation, release) runs once per leg.
+#
+# ── PER-WHEEL EDITS (to reuse this for cumesh / flex_gemm / nvdiffrast) ──────────
+#   1. `name:` above.
+#   2. Build subdir in BOTH build steps: o_voxel builds `./o-voxel`; the others
+#      build `.` (repo root).
+#   3. Artifact + log names: replace `ovoxel` below.
+#   4. `submodules` note in checkout if the repo vendors different deps.
+# ────────────────────────────────────────────────────────────────────────────────
 
 on:
   workflow_dispatch:          # manual "Run workflow" button
     inputs:
       gfx_arch:
-        description: "GPU arch(s), semicolon-separated. Default = all sanity-tested."
-        default: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
+        description: "GPU arch(s), semicolon-separated. Default = RDNA1-4 consumer set."
+        default: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250"
         required: true
       torch_pin:
-        description: "Exact torch version to build against (7.14 line)."
-        default: "2.12.0+rocm7.14.0a20260624"
+        description: "Exact torch version (stable ROCm 10.0 line)."
+        default: "2.13.0+rocm10.0.0"
+        required: true
+      rocm_pin:
+        description: "Exact rocm SDK version."
+        default: "10.0.0"
         required: true
   release:
     types: [created]          # also build when you publish a release
 
 env:
-  TORCH_PIN: ${{ github.event.inputs.torch_pin || '2.12.0+rocm7.14.0a20260624' }}
+  TORCH_PIN:   ${{ github.event.inputs.torch_pin || '2.13.0+rocm10.0.0' }}
+  ROCM_PIN:    ${{ github.event.inputs.rocm_pin  || '10.0.0' }}
+  ROCM_INDEX:  https://stable.repo.amd.com/rocm/whl-next/
+  # NOTE: default arch list is the RDNA consumer set (matches the sanity-tested
+  # table). To also cover Instinct, append: gfx908;gfx90a;gfx942;gfx950 and
+  # gfx1250 once you want the RDNA4.5 APU. They bloat build time/size for hardware
+  # that won't run desktop ComfyUI, so they're opt-in via the dispatch input.
 
 permissions:
   contents: read
@@ -29,43 +51,62 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]     # add "3.11" to widen coverage
+        os: [windows-2022, ubuntu-24.04]
+        python-version: ["3.12"]
     steps:
       - name: Checkout (rocm-gfx1030)
         uses: actions/checkout@v4
         with:
           ref: rocm-gfx1030
-          submodules: false            # FlexGEMM has no submodules
+          submodules: recursive
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      # MSVC/clang-cl toolchain. windows-latest has VS Build Tools; this action
-      # sets up the dev environment so clang-cl and the Windows SDK are on PATH.
+      # ── Windows-only toolchain: MSVC/clang-cl dev environment ────────────────
       - name: Set up MSVC dev environment
+        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install build tooling + ROCm torch (TheRock multi-arch)
+      # ── Install ROCm torch: Windows (pwsh) ───────────────────────────────────
+      - name: Install build tooling + ROCm torch (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           python -m pip install --upgrade pip wheel setuptools ninja
           $arch = "${{ github.event.inputs.gfx_arch }}"
-          if (-not $arch) { $arch = "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201" }
+          if (-not $arch) { $arch = "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250" }
           echo "GFX_ARCH=$arch" >> $env:GITHUB_ENV
-          # Pin to the 7.14 production line (more stable than 10.1 nightlies).
-          # torch exact version required (local version can't be wildcarded);
-          # rocm can use 7.14.* to accept any 7.14 patch. --pre needed for the alpha suffix.
-          python -m pip install --pre --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ `
+          # Stable pins, no --pre needed. torchvision/torchaudio are NOT required
+          # to compile a torch extension, so they're omitted to save build time.
+          # If a transitive dep 404s on this index, switch --index-url to
+          # --extra-index-url so PyPI stays available for those.
+          python -m pip install --index-url $env:ROCM_INDEX `
             "torch==$env:TORCH_PIN" `
-            "rocm[libraries,devel,device-all]==7.14.*"
+            "rocm[libraries,devel,device-all]==$env:ROCM_PIN"
 
-      - name: Discover ROCm path + put clang on PATH
+      # ── Install ROCm torch: Linux (bash) ─────────────────────────────────────
+      - name: Install build tooling + ROCm torch (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip wheel setuptools ninja
+          arch="${{ github.event.inputs.gfx_arch }}"
+          if [ -z "$arch" ]; then arch="gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201;gfx1250"; fi
+          echo "GFX_ARCH=$arch" >> "$GITHUB_ENV"
+          python -m pip install --index-url "$ROCM_INDEX" \
+            "torch==$TORCH_PIN" \
+            "rocm[libraries,devel,device-all]==$ROCM_PIN"
+
+      # ── Discover ROCm + compiler on PATH: Windows (pwsh) ─────────────────────
+      - name: Discover ROCm path + put clang on PATH (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           # 'rocm-sdk path --root' returns the real toolchain root
@@ -77,40 +118,70 @@ jobs:
           }
           echo "ROCM_PATH=$rocmPath" >> $env:GITHUB_ENV
           echo "ROCM_HOME=$rocmPath" >> $env:GITHUB_ENV
-
-          # ROCm ships clang as amdclang-cl.exe under lib\llvm\bin; put it on PATH
-          # so torch's cpp_extension / the HIP build find it instead of MSVC cl.exe.
+          # Force clang-cl so torch's cpp_extension / HIP build finds it over cl.exe.
           $llvmBin = Join-Path $rocmPath "lib\llvm\bin"
           echo "$llvmBin" >> $env:GITHUB_PATH
-          # match local setup_build_env.ps1: force clang-cl as the compiler
-          echo "CC=clang-cl" >> $env:GITHUB_ENV
+          echo "CC=clang-cl"  >> $env:GITHUB_ENV
           echo "CXX=clang-cl" >> $env:GITHUB_ENV
-
           Write-Host "ROCM_PATH = $rocmPath"
           Write-Host "clang present: $(Test-Path (Join-Path $llvmBin 'amdclang-cl.exe'))"
           python -c "import torch; print('torch', torch.__version__, 'hip', torch.version.hip)"
 
-      - name: Build wheel (cross-compile for $GFX_ARCH)
+      # ── Discover ROCm + compiler on PATH: Linux (bash) ───────────────────────
+      - name: Discover ROCm path + put hipcc/clang on PATH (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rocmPath="$(rocm-sdk path --root)"
+          if [ -z "$rocmPath" ] || [ ! -d "$rocmPath" ]; then
+            echo "rocm-sdk path --root did not return a valid path: '$rocmPath'" >&2
+            exit 1
+          fi
+          echo "ROCM_PATH=$rocmPath" >> "$GITHUB_ENV"
+          echo "ROCM_HOME=$rocmPath" >> "$GITHUB_ENV"
+          # No clang-cl override on Linux: torch drives hipcc for device code and
+          # system g++ for host code once torch.version.hip is set.
+          echo "$rocmPath/bin"          >> "$GITHUB_PATH"
+          echo "$rocmPath/lib/llvm/bin" >> "$GITHUB_PATH"
+          echo "ROCM_PATH = $rocmPath"
+          echo "hipcc present: $([ -x "$rocmPath/bin/hipcc" ] && echo yes || echo no)"
+          python -c "import torch; print('torch', torch.__version__, 'hip', torch.version.hip)"
+
+      # ── Build wheel: Windows (pwsh) ──────────────────────────────────────────
+      - name: Build wheel for $GFX_ARCH (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
           GPU_ARCHS: ${{ env.GFX_ARCH }}
-          DISTUTILS_USE_SDK: "1"       # let setuptools use the MSVC env we set up
+          DISTUTILS_USE_SDK: "1"       # let setuptools use the MSVC env
         run: |
           Write-Host "Building for $env:GPU_ARCHS with ROCM_PATH=$env:ROCM_PATH"
-          python -m pip wheel . --no-build-isolation --no-deps -w dist -v 2>&1 | Tee-Object build.log
+          python -m pip wheel .\o-voxel --no-build-isolation --no-deps -w dist -v 2>&1 | Tee-Object build.log
           Get-ChildItem dist
 
+      # ── Build wheel: Linux (bash) ────────────────────────────────────────────
+      - name: Build wheel for $GFX_ARCH (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          GPU_ARCHS: ${{ env.GFX_ARCH }}
+        run: |
+          echo "Building for $GPU_ARCHS with ROCM_PATH=$ROCM_PATH"
+          python -m pip wheel ./o-voxel --no-build-isolation --no-deps -w dist -v 2>&1 | tee build.log
+          ls -l dist
+
+      # ── Shared tail ──────────────────────────────────────────────────────────
       - name: Upload build log (always, for debugging)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-py${{ matrix.python-version }}
+          name: build-log-${{ runner.os }}-py${{ matrix.python-version }}
           path: build.log
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flexgemm-multiarch-py${{ matrix.python-version }}
+          name: ovoxel-multiarch-${{ runner.os }}-py${{ matrix.python-version }}
           path: dist/*.whl
 
       # Cryptographically tie the wheel to this source + workflow run.
@@ -119,7 +190,8 @@ jobs:
         with:
           subject-path: dist/*.whl
 
-      # On a release, attach the wheel to it so users can pip-install by URL.
+      # On a release, attach the wheel. win_amd64 vs linux_x86_64 tags mean the
+      # two legs never collide on the same release.
       - name: Attach wheel to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
