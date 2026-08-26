@@ -9,13 +9,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flex_gemm"
-version = "1.0.0"
-description = "A Cross-Platform Backend for High-Performance Sparse Convolutions"
-requires-python = ">=3.8"
+version = "1.0.0+rocm10.0"
+description = "A Cross-Platform Backend for High-Performance Sparse Convolutions (AMD ROCm fork)"
+requires-python = ">=3.12"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
     { name = "Jianfeng Xiang", email = "belljig@outlook.com" }
+]
+maintainers = [
+    { name = "Drayton Monkman" }
 ]
 dependencies = [
     "torch>=2.4.0",
@@ -23,3 +26,9 @@ dependencies = [
     "triton-windows>=3.2.0; platform_system == 'Windows'",
     "filelock",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dmonkman/FlexGEMM-ROCm"
+Repository = "https://github.com/dmonkman/FlexGEMM-ROCm"
+"Bug Tracker" = "https://github.com/dmonkman/FlexGEMM-ROCm/issues"
+Upstream = "https://github.com/visualbruno/FlexGEMM"
